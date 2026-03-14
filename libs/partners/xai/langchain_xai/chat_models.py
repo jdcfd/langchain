@@ -6,6 +6,7 @@ import warnings
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 import openai
+from openai.types.responses import Response
 from langchain_core.messages import AIMessageChunk
 from langchain_core.utils import from_env, secret_from_env
 from langchain_openai.chat_models.base import BaseChatOpenAI
@@ -25,7 +26,6 @@ if TYPE_CHECKING:
     )
     from langchain_core.outputs import ChatGenerationChunk, ChatResult
     from langchain_core.runnables import Runnable
-    from openai.types.responses import Response
 
 _DictOrPydanticClass: TypeAlias = dict[str, Any] | type[BaseModel] | type
 _DictOrPydantic: TypeAlias = dict | BaseModel
