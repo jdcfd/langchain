@@ -1,4 +1,4 @@
-"""Wrapper around xAI's Chat Completions API."""
+"""Wrapper around xAI's Responses API (preferred) and Chat Completions API."""
 
 from __future__ import annotations
 
@@ -15,18 +15,17 @@ from typing_extensions import Self
 from langchain_xai.data._profiles import _PROFILES
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
     from langchain_core.language_models import (
+        LangSmithParams,
+        LanguageModelInput,
         ModelProfile,
         ModelProfileRegistry,
     )
-    from langchain_core.language_models.chat_models import (
-        LangSmithParams,
-        LanguageModelInput,
-    )
     from langchain_core.outputs import ChatGenerationChunk, ChatResult
     from langchain_core.runnables import Runnable
+    from openai.types.responses import Response
 
 _DictOrPydanticClass: TypeAlias = dict[str, Any] | type[BaseModel] | type
 _DictOrPydantic: TypeAlias = dict | BaseModel
@@ -43,7 +42,8 @@ def _get_default_model_profile(model_name: str) -> ModelProfile:
 class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
     r"""ChatXAI chat model.
 
-    Refer to [xAI's documentation](https://docs.x.ai/docs/api-reference#chat-completions)
+    Refer to [xAI's documentation](https://docs.x.ai/developers/model-capabilities/text/generate-text)
+    for the preferred Responses API and [Chat Completions](https://docs.x.ai/developers/rest-api-reference/inference/chat)
     for more nuanced details on the API's behavior and supported parameters.
 
     Setup:
@@ -74,6 +74,12 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
             Max number of retries.
         api_key:
             xAI API key. If not passed in will be read from env var `XAI_API_KEY`.
+        use_responses_api:
+            Whether to use the Responses API (preferred). If None, inferred from params
+            and model. (Default: inferred)
+        output_version:
+            Output format version for AIMessage. Use "responses/v1" for rich content blocks
+            from Responses API.
 
     Instantiate:
         ```python
@@ -424,7 +430,9 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
     ```
     """
 
-    openai_api_key: SecretStr | None = None
+    openai_api_key: (
+        SecretStr | None | Callable[[], str] | Callable[[], Awaitable[str]]
+    ) = None
     openai_api_base: str | None = None
 
     model_config = ConfigDict(
@@ -558,7 +566,7 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
 
     def _create_chat_result(
         self,
-        response: dict | openai.BaseModel,
+        response: dict | openai.BaseModel | Response,
         generation_info: dict | None = None,
     ) -> ChatResult:
         rtn = super()._create_chat_result(response, generation_info)
@@ -566,17 +574,29 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
         for generation in rtn.generations:
             generation.message.response_metadata["model_provider"] = "xai"
 
-        if not isinstance(response, openai.BaseModel):
+        if isinstance(response, dict):
             return rtn
 
-        if hasattr(response.choices[0].message, "reasoning_content"):  # type: ignore[attr-defined]
-            rtn.generations[0].message.additional_kwargs["reasoning_content"] = (
-                response.choices[0].message.reasoning_content  # type: ignore[attr-defined]
-            )
+        if not isinstance(response, (openai.BaseModel, Response)):
+            return rtn
+
+        # Handle both Chat Completions and Responses API responses
+        if hasattr(response, "choices") and hasattr(
+            getattr(response, "choices", [None])[0].message
+            if hasattr(response, "choices")
+            else None,
+            "reasoning_content",
+        ):  # type: ignore[attr-defined]
+            rtn.generations[0].message.additional_kwargs["reasoning_content"] = getattr(
+                response.choices[0].message, "reasoning_content", None
+            )  # type: ignore[attr-defined]
+        elif isinstance(response, Response) and hasattr(response, "output"):
+            # Extract from Responses output items if needed (reasoning in blocks via base)
+            pass  # base handles most; xai-specific if additional
 
         if hasattr(response, "citations"):
             rtn.generations[0].message.additional_kwargs["citations"] = (
-                response.citations
+                response.citations  # type: ignore[attr-defined]
             )
 
         # Unlike OpenAI, xAI reports reasoning tokens < completion tokens. So we assume
