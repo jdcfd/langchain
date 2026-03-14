@@ -547,6 +547,20 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
             self.profile = _get_default_model_profile(self.model_name)
         return self
 
+    def _use_responses_api(self, payload: dict) -> bool:
+        """Determine whether to use the Responses API (the preferred API for xAI).
+
+        xAI prefers Responses API for models starting with `grok-4` or `grok-code`.
+        """
+        if isinstance(self.use_responses_api, bool):
+            return self.use_responses_api
+        model_name = self.model_name or payload.get("model", "")
+        if model_name and (
+            model_name.startswith("grok-4") or model_name.startswith("grok-code")
+        ):
+            return True
+        return super()._use_responses_api(payload)
+
     def _stream(self, *args: Any, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
         """Route to Chat Completions or Responses API."""
         if self._use_responses_api({**kwargs, **self.model_kwargs}):
