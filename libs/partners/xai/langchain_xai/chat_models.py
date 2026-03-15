@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
+import json
 import warnings
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypeVar, cast
 
 import openai
-from openai.types.responses import Response
 from langchain_core.messages import AIMessageChunk
 from langchain_core.utils import from_env, secret_from_env
-from langchain_openai.chat_models.base import BaseChatOpenAI
+from langchain_openai.chat_models.base import (
+    BaseChatOpenAI,
+    _construct_lc_result_from_responses_api as _base_construct_lc_result_from_responses_api,
+)
+from openai.types.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from typing_extensions import Self
 
 from langchain_xai.data._profiles import _PROFILES
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-
     from langchain_core.language_models import (
         LangSmithParams,
         LanguageModelInput,
@@ -26,6 +29,7 @@ if TYPE_CHECKING:
     )
     from langchain_core.outputs import ChatGenerationChunk, ChatResult
     from langchain_core.runnables import Runnable
+
 
 _DictOrPydanticClass: TypeAlias = dict[str, Any] | type[BaseModel] | type
 _DictOrPydantic: TypeAlias = dict | BaseModel
@@ -37,6 +41,21 @@ _MODEL_PROFILES = cast("ModelProfileRegistry", _PROFILES)
 def _get_default_model_profile(model_name: str) -> ModelProfile:
     default = _MODEL_PROFILES.get(model_name) or {}
     return default.copy()
+
+
+def _construct_lc_result_from_responses_api(
+    response: Response,
+    schema: Any | None = None,
+    metadata: dict | None = None,
+    output_version: str | None = None,
+) -> "ChatResult":
+    """Wrapper around the base to set xAI model_provider for Responses API."""
+    result = _base_construct_lc_result_from_responses_api(
+        response, schema=schema, metadata=metadata, output_version=output_version
+    )
+    for generation in result.generations:
+        generation.message.response_metadata["model_provider"] = "xai"
+    return result
 
 
 class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
@@ -555,9 +574,7 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
         if isinstance(self.use_responses_api, bool):
             return self.use_responses_api
         model_name = self.model_name or payload.get("model", "")
-        if model_name and (
-            model_name.startswith("grok-4") or model_name.startswith("grok-code")
-        ):
+        if model_name and (model_name.startswith(("grok-4", "grok-code"))):
             return True
         return super()._use_responses_api(payload)
 
@@ -605,7 +622,7 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
                 response.choices[0].message, "reasoning_content", None
             )  # type: ignore[attr-defined]
         elif isinstance(response, Response) and hasattr(response, "output"):
-            # Extract from Responses output items if needed (reasoning in blocks via base)
+            # Extract from Responses output items if needed
             pass  # base handles most; xai-specific if additional
 
         if hasattr(response, "citations"):
@@ -762,3 +779,13 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
         return super().with_structured_output(
             schema, method=method, include_raw=include_raw, strict=strict, **kwargs
         )
+
+
+# Patch base module's function so that Responses API (used by _generate/_stream_responses)
+# uses the xAI version that sets correct model_provider. This is required because
+# the base _generate short-circuits before calling _create_chat_result.
+import langchain_openai.chat_models.base as openai_base_module
+
+openai_base_module._construct_lc_result_from_responses_api = (
+    _construct_lc_result_from_responses_api
+)

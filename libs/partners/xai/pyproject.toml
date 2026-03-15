@@ -86,6 +86,8 @@ ignore = [
     "SLF001",  # Private member access
     "FIX",     # TODOs
     "TD",      # TODOs
+    "TC002",   # Type checking, to match settings in OpenAI provider
+    "TC003",
 ]
 unfixable = ["B028"] # People should intentionally tune the stacklevel
 
