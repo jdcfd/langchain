@@ -559,12 +559,8 @@ class ChatXAI(BaseChatOpenAI):  # type: ignore[override]
 
         return self
 
-    @model_validator(mode="after")
-    def _set_model_profile(self) -> Self:
-        """Set model profile if not overridden."""
-        if self.profile is None:
-            self.profile = _get_default_model_profile(self.model_name)
-        return self
+    def _resolve_model_profile(self) -> ModelProfile | None:
+        return _get_default_model_profile(self.model_name) or None
 
     def _use_responses_api(self, payload: dict) -> bool:
         """Determine whether to use the Responses API (the preferred API for xAI).
